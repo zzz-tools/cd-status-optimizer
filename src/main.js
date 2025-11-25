@@ -4,8 +4,8 @@
  */
 const CONFIG = {
   // 粗配分設定
-  BATCH_SIZE: 10,           // 1回あたりのポイント配分数
-  TOP_VARS: 3,              // 同時に考慮する上位変数の数
+  BATCH_SIZE: 20,           // 1回あたりのポイント配分数
+  TOP_VARS: 4,              // 同時に考慮する上位変数の数
 
   // リバランス設定
   MAX_ITERATIONS: 30,       // 最大反復回数
@@ -49,7 +49,13 @@ function onOpen() {
     .createMenu('🎮 最適化ツール')
     .addItem('🚀 サブステ最適化計算', 'optimizeSubStats')
     .addSeparator()
-    .addItem('⚙️ 設定変更', 'configureSettings')
+    .addSubMenu(SpreadsheetApp.getUi().createMenu('⚙️ 設定')
+      .addItem('📍 サブステ範囲指定', 'configureSubstatRange')
+      .addItem('🎯 計算値セル指定', 'configureCalcCell') 
+      .addSeparator()
+      .addItem('⚙️ バッチサイズ設定', 'configureBatchSize')
+      .addItem('⚙️ 上位候補数設定', 'configureTopVars')
+    )
     .addToUi();
 }
 
@@ -123,37 +129,129 @@ function showResultDialog(ui, result, executionTime) {
 }
 
 /**
- * セル範囲の設定ダイアログを表示
+ * サブステ範囲をセル選択で設定
  */
-function configureSettings() {
+function configureSubstatRange() {
   const ui = SpreadsheetApp.getUi();
   const props = PropertiesService.getDocumentProperties();
-
-  const varRange = promptForSetting(ui, props, 'varRange', 'サブステヒットセルの範囲を指定',
-    '最適化したいサブステヒット数のセル範囲を入力してください\n例: B2:B11');
-  if (varRange === null) return;
-
-  const calcCell = promptForSetting(ui, props, 'calcCell', 'ダメージセルを指定',
-    'ダメージ計算結果が表示されるセルを入力してください\n例: D2');
-  if (calcCell === null) return;
-
-  props.setProperties({ varRange, calcCell });
-  ui.alert('設定完了✅', `変数範囲: ${varRange}\n計算セル: ${calcCell}`, ui.ButtonSet.OK);
+  const selectedRange = SpreadsheetApp.getActiveRange();
+  
+  if (!selectedRange) {
+    ui.alert('エラー', 'サブステ範囲を選択してからメニューを実行してください', ui.ButtonSet.OK);
+    return;
+  }
+  
+  if (selectedRange.getNumColumns() !== 1) {
+    ui.alert('エラー', 'サブステ範囲は縦一列で選択してください', ui.ButtonSet.OK);
+    return;
+  }
+  
+  const rangeA1 = selectedRange.getA1Notation();
+  const current = props.getProperty('varRange');
+  
+  const response = ui.alert(
+    'サブステ範囲設定',
+    `現在の設定: ${current || '未設定'}\n` +
+    `新しい範囲: ${rangeA1}\n\n` +
+    `この範囲をサブステ範囲として設定しますか？`,
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (response !== ui.Button.YES) return;
+  
+  props.setProperty('varRange', rangeA1);
+  ui.alert('設定完了✅', `サブステ範囲: ${rangeA1}`, ui.ButtonSet.OK);
 }
 
 /**
- * 設定値の入力を求める
- * @param {GoogleAppsScript.Base.Ui} ui - スプレッドシートのUIインスタンス
- * @param {GoogleAppsScript.Properties.Properties} props - ドキュメントプロパティ
- * @param {string} key - プロパティのキー名
- * @param {string} title - ダイアログのタイトル
- * @param {string} message - ダイアログのメッセージ
- * @returns {string|null} 入力値、キャンセル時はnull
+ * 計算値セルをセル選択で設定
  */
-function promptForSetting(ui, props, key, title, message) {
-  const current = props.getProperty(key) || 'なし';
-  const response = ui.prompt(title, `${message}\n\n現在の設定: ${current}`, ui.ButtonSet.OK_CANCEL);
-  return response.getSelectedButton() === ui.Button.OK ? response.getResponseText() : null;
+function configureCalcCell() {
+  const ui = SpreadsheetApp.getUi();
+  const props = PropertiesService.getDocumentProperties();
+  const selectedRange = SpreadsheetApp.getActiveRange();
+  
+  if (!selectedRange) {
+    ui.alert('エラー', 'ダメージ計算セルを選択してからメニューを実行してください', ui.ButtonSet.OK);
+    return;
+  }
+  
+  if (selectedRange.getNumRows() !== 1 || selectedRange.getNumColumns() !== 1) {
+    ui.alert('エラー', '単一のセルを選択してください', ui.ButtonSet.OK);
+    return;
+  }
+  
+  const cellA1 = selectedRange.getA1Notation();
+  const current = props.getProperty('calcCell');
+  
+  const response = ui.alert(
+    '計算値セル設定',
+    `現在の設定: ${current || '未設定'}\n` +
+    `新しいセル: ${cellA1}\n\n` +
+    `このセルを計算値セルとして設定しますか？`,
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (response !== ui.Button.YES) return;
+  
+  props.setProperty('calcCell', cellA1);
+  ui.alert('設定完了✅', `計算値セル: ${cellA1}`, ui.ButtonSet.OK);
+}
+
+/**
+ * バッチサイズの設定
+ */
+function configureBatchSize() {
+  const ui = SpreadsheetApp.getUi();
+  const props = PropertiesService.getDocumentProperties();
+  
+  const current = props.getProperty('batchSize') || CONFIG.BATCH_SIZE.toString();
+  const response = ui.prompt(
+    'バッチサイズ設定',
+    `一度に処理するポイント数を設定してください\n` +
+    `推奨値: 10-30（大きいほど高速だが精度が下がる可能性）\n\n` +
+    `現在の設定: ${current}`,
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  
+  const value = parseInt(response.getResponseText());
+  if (isNaN(value) || value <= 0 || value > 100) {
+    ui.alert('エラー', '1から100の整数を入力してください', ui.ButtonSet.OK);
+    return;
+  }
+  
+  props.setProperty('batchSize', value.toString());
+  ui.alert('設定完了✅', `バッチサイズ: ${value}`, ui.ButtonSet.OK);
+}
+
+/**
+ * 上位候補数の設定
+ */
+function configureTopVars() {
+  const ui = SpreadsheetApp.getUi();
+  const props = PropertiesService.getDocumentProperties();
+  
+  const current = props.getProperty('topVars') || CONFIG.TOP_VARS.toString();
+  const response = ui.prompt(
+    '上位候補数設定',
+    `同時に考慮する優秀サブステの数を設定してください\n` +
+    `推奨値: 2-6（多いほど探索範囲が広がるが計算時間も増加）\n\n` +
+    `現在の設定: ${current}`,
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  
+  const value = parseInt(response.getResponseText());
+  if (isNaN(value) || value <= 0 || value > 10) {
+    ui.alert('エラー', '1から10の整数を入力してください', ui.ButtonSet.OK);
+    return;
+  }
+  
+  props.setProperty('topVars', value.toString());
+  ui.alert('設定完了✅', `上位候補数: ${value}`, ui.ButtonSet.OK);
 }
 
 // ======== コアロジック ========
@@ -245,7 +343,9 @@ function allocateByUtility(state, totalPoints, varRange, calcCell) {
   let allocated = 0;
 
   while (allocated < totalPoints) {
-    const batch = Math.min(CONFIG.BATCH_SIZE, totalPoints - allocated);
+    const props = PropertiesService.getDocumentProperties();
+    const batchSize = parseInt(props.getProperty('batchSize') || CONFIG.BATCH_SIZE.toString());
+    const batch = Math.min(batchSize, totalPoints - allocated);
 
     const measureResult = measureUtilities(currentState, varRange, calcCell);
     currentState = measureResult.state;
@@ -269,11 +369,14 @@ function allocateByUtility(state, totalPoints, varRange, calcCell) {
  * @returns {{index: number, utility: number}[]} 上位変数の配列（インデックスと効用値）
  */
 function selectTopVars(utilities) {
+  const props = PropertiesService.getDocumentProperties();
+  const topVars = parseInt(props.getProperty('topVars') || CONFIG.TOP_VARS.toString());
+  
   return utilities
     .map((u, i) => ({ index: i, utility: u }))
     .filter(item => item.utility > 0)
     .sort((a, b) => b.utility - a.utility)
-    .slice(0, CONFIG.TOP_VARS);
+    .slice(0, topVars);
 }
 
 /**
@@ -467,12 +570,12 @@ function createSwapCandidates(activeVars, utilities) {
  * 最良の移動を試行し、改善があれば適用する
  * @param {State} currentState - 現在の状態（valuesは直接変更される）
  * @param {{from: number, to: number, priority: number}[]} candidates - 移動候補の配列
- * @param {number[]} utilities - 各変数の効用値配列（未使用：将来の拡張用に保持）
+ * @param {number[]} _ - 未使用パラメータ
  * @param {GoogleAppsScript.Spreadsheet.Range} varRange - 変数セル範囲
  * @param {GoogleAppsScript.Spreadsheet.Range} calcCell - ダメージ計算セル
  * @returns {boolean} 改善があればtrue
  */
-function applyBestSwap(currentState, candidates, utilities, varRange, calcCell) {
+function applyBestSwap(currentState, candidates, _, varRange, calcCell) {
   const baselineDamage = calcCell.getValue();
   const maxTries = Math.min(CONFIG.MAX_CANDIDATES, candidates.length);
 
@@ -553,11 +656,14 @@ function tryZeroVars(currentState, utilities, varRange, calcCell) {
  * @returns {number[]} 効用が低い変数のインデックス配列（最大TOP_VARS個）
  */
 function selectLowVars(values, utilities) {
+  const props = PropertiesService.getDocumentProperties();
+  const topVars = parseInt(props.getProperty('topVars') || CONFIG.TOP_VARS.toString());
+  
   return values
     .map((v, i) => v > 0 ? { index: i, utility: utilities[i] } : null)
     .filter(x => x !== null)
     .sort((a, b) => a.utility - b.utility)
-    .slice(0, CONFIG.TOP_VARS)
+    .slice(0, topVars)
     .map(x => x.index);
 }
 
