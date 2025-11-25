@@ -21,7 +21,7 @@ const CONFIG = {
  * @param {number[]} values - 書き込む値の配列
  * @returns {void}
  */
-function writeAndFlush(range, values) {
+function updateSheet(range, values) {
   range.setValues(values.map(v => [v]));
   SpreadsheetApp.flush();
 }
@@ -32,7 +32,7 @@ function writeAndFlush(range, values) {
  * @param {function(number): boolean} predicate - 条件関数
  * @returns {number[]} 条件に一致したインデックスの配列
  */
-function getIndicesWhere(arr, predicate) {
+function filterIndices(arr, predicate) {
   return arr.reduce((indices, val, i) => {
     if (predicate(val)) indices.push(i);
     return indices;
@@ -189,12 +189,12 @@ function runOptimization(varRangeStr, calcCellStr, totalPoints) {
   let state = { values: new Array(numVars).fill(0), calcCount: 0 };
 
   // 初期化
-  writeAndFlush(varRange, state.values);
+  updateSheet(varRange, state.values);
   const initialDamage = calcCell.getValue();
   if (initialDamage <= 0) throw new Error('初期ダメージが0以下です');
 
   // Phase 1: 粗配分
-  const roughResult = allocateRoughly(state, totalPoints, varRange, calcCell);
+  const roughResult = allocateByUtility(state, totalPoints, varRange, calcCell);
   state = roughResult.state;
   const roughDamage = calcCell.getValue();
 
@@ -211,7 +211,7 @@ function runOptimization(varRangeStr, calcCellStr, totalPoints) {
 }
 
 /**
- * 効用に基づきポイントを粗く配分（Phase 1: 貪欲法）
+ * 効用に基づきポイントを配分（Phase 1: 貪欲法）
  * 
  * アルゴリズム:
  * 1. BATCH_SIZE（デフォルト10）ポイントずつ配分を繰り返す
@@ -239,7 +239,7 @@ function runOptimization(varRangeStr, calcCellStr, totalPoints) {
  * @param {GoogleAppsScript.Spreadsheet.Range} calcCell - ダメージ計算セル
  * @returns {{state: State, utilities: number[]}} 更新された状態と効用配列
  */
-function allocateRoughly(state, totalPoints, varRange, calcCell) {
+function allocateByUtility(state, totalPoints, varRange, calcCell) {
   let currentState = { ...state, values: [...state.values] };
   let latestUtilities = new Array(state.values.length).fill(0);
   let allocated = 0;
@@ -251,13 +251,13 @@ function allocateRoughly(state, totalPoints, varRange, calcCell) {
     currentState = measureResult.state;
     latestUtilities = measureResult.utilities;
 
-    const topVars = getTopUtilityVars(latestUtilities);
+    const topVars = selectTopVars(latestUtilities);
     const newValues = distributePoints(currentState.values, topVars, batch);
 
     currentState = { ...currentState, values: newValues };
     allocated += batch;
 
-    writeAndFlush(varRange, newValues);
+    updateSheet(varRange, newValues);
   }
 
   return { state: currentState, utilities: latestUtilities };
@@ -268,7 +268,7 @@ function allocateRoughly(state, totalPoints, varRange, calcCell) {
  * @param {number[]} utilities - 各変数の効用値配列
  * @returns {{index: number, utility: number}[]} 上位変数の配列（インデックスと効用値）
  */
-function getTopUtilityVars(utilities) {
+function selectTopVars(utilities) {
   return utilities
     .map((u, i) => ({ index: i, utility: u }))
     .filter(item => item.utility > 0)
@@ -321,7 +321,7 @@ function distributePoints(currentValues, topVars, batch) {
  * 
  * なぜ復元が必要？
  *   この関数は「もし+1したら」を測定する仮想的な操作
- *   実際の配分は呼び出し側（allocateRoughly）が決定する
+ *   実際の配分は呼び出し側（allocateByUtility）が決定する
  *   → 測定のための変更を残すと、意図しない状態で次の処理が始まる
  * 
  * 計算コスト:
@@ -342,13 +342,13 @@ function measureUtilities(state, varRange, calcCell) {
     const testValues = [...state.values];
     testValues[i]++;
 
-    writeAndFlush(varRange, testValues);
+    updateSheet(varRange, testValues);
     utilities[i] = Math.max(0, calcCell.getValue() - baseDamage);
     calcCount++;
   }
 
   // 元の状態に復元
-  writeAndFlush(varRange, state.values);
+  updateSheet(varRange, state.values);
 
   return {
     state: { ...state, calcCount },
@@ -361,11 +361,11 @@ function measureUtilities(state, varRange, calcCell) {
  * 
  * 粗配分後の解を2段階で改善する:
  * 
- * 【Step 1: localOptimization】
+ * 【Step 1: optimizeBySwap】
  *   既にポイントが割り当てられている変数間で1ポイントを移動させて改善を探す
  *   例: 会心率3 → 会心率2, 会心ダメ5 → 会心ダメ6
  * 
- * 【Step 2: zeroHitSwapOptimization】
+ * 【Step 2: tryZeroVars】
  *   0割当の変数が実は有効ではないかを再評価
  *   例: 攻撃力10, 元素熟知0 → 攻撃力9, 元素熟知1
  *   
@@ -392,14 +392,14 @@ function rebalance(state, initialUtilities, varRange, calcCell) {
   let utilities = [...initialUtilities];
   let improvements = 0;
 
-  improvements += localOptimization(currentState, utilities, varRange, calcCell);
-  improvements += zeroHitSwapOptimization(currentState, utilities, varRange, calcCell);
+  improvements += optimizeBySwap(currentState, utilities, varRange, calcCell);
+  improvements += tryZeroVars(currentState, utilities, varRange, calcCell);
 
   return { state: currentState, improvements };
 }
 
 /**
- * 割当済み変数間でポイントを移動して改善を探索
+ * 割当済み変数間でポイントを交換して改善を探索
  * 
  * アルゴリズム:
  * 1. ポイントが割り当てられている変数のペアをすべて列挙
@@ -420,17 +420,17 @@ function rebalance(state, initialUtilities, varRange, calcCell) {
  * @param {GoogleAppsScript.Spreadsheet.Range} calcCell - ダメージ計算セル
  * @returns {number} 改善が見つかった回数
  */
-function localOptimization(currentState, utilities, varRange, calcCell) {
+function optimizeBySwap(currentState, utilities, varRange, calcCell) {
   let improvements = 0;
 
   for (let iteration = 0; iteration < CONFIG.MAX_ITERATIONS; iteration++) {
-    const activeVars = getIndicesWhere(currentState.values, v => v > 0);
+    const activeVars = filterIndices(currentState.values, v => v > 0);
     if (activeVars.length <= 1) break;
 
-    const candidates = generateMoveCandidates(activeVars, utilities);
+    const candidates = createSwapCandidates(activeVars, utilities);
     if (candidates.length === 0 || candidates[0].priority <= 0) break;
 
-    const improved = tryBestMove(currentState, candidates, utilities, varRange, calcCell);
+    const improved = applyBestSwap(currentState, candidates, utilities, varRange, calcCell);
     if (!improved) break;
 
     improvements++;
@@ -445,7 +445,7 @@ function localOptimization(currentState, utilities, varRange, calcCell) {
  * @param {number[]} utilities - 各変数の効用値配列
  * @returns {{from: number, to: number, priority: number}[]} 移動候補の配列（優先度順にソート済み）
  */
-function generateMoveCandidates(activeVars, utilities) {
+function createSwapCandidates(activeVars, utilities) {
   const candidates = [];
 
   for (const from of activeVars) {
@@ -464,7 +464,7 @@ function generateMoveCandidates(activeVars, utilities) {
 }
 
 /**
- * 最良の移動を試行
+ * 最良の移動を試行し、改善があれば適用する
  * @param {State} currentState - 現在の状態（valuesは直接変更される）
  * @param {{from: number, to: number, priority: number}[]} candidates - 移動候補の配列
  * @param {number[]} utilities - 各変数の効用値配列（未使用：将来の拡張用に保持）
@@ -472,7 +472,7 @@ function generateMoveCandidates(activeVars, utilities) {
  * @param {GoogleAppsScript.Spreadsheet.Range} calcCell - ダメージ計算セル
  * @returns {boolean} 改善があればtrue
  */
-function tryBestMove(currentState, candidates, utilities, varRange, calcCell) {
+function applyBestSwap(currentState, candidates, utilities, varRange, calcCell) {
   const baselineDamage = calcCell.getValue();
   const maxTries = Math.min(CONFIG.MAX_CANDIDATES, candidates.length);
 
@@ -484,7 +484,7 @@ function tryBestMove(currentState, candidates, utilities, varRange, calcCell) {
     testValues[candidate.from]--;
     testValues[candidate.to]++;
 
-    writeAndFlush(varRange, testValues);
+    updateSheet(varRange, testValues);
 
     if (calcCell.getValue() > baselineDamage + CONFIG.THRESHOLD) {
       currentState.values = testValues;
@@ -496,7 +496,7 @@ function tryBestMove(currentState, candidates, utilities, varRange, calcCell) {
 }
 
 /**
- * 0割当の変数と割当済み変数のスワップを試行
+ * 0割当の変数を試行する
  * 
  * 目的:
  *   粗配分で見落とされた変数が、実は有効ではないかを再評価する
@@ -508,15 +508,17 @@ function tryBestMove(currentState, candidates, utilities, varRange, calcCell) {
  * 
  * アルゴリズム:
  * 1. 0割当の変数（zeroVars）をすべて取得
- * 2. 割当済み変数のうち、効用が低いもの（lowUtilityVars）を取得
+ * 2. 割当済み変数のうち、効用が低いもの（lowVars）を取得
  *    → なぜ効用が低い変数から削る？
  *      効用が低い = 削っても損失が少ない = スワップの成功確率が高い
- * 3. すべてのzero×lowUtilityの組み合わせでスワップを試す
+ * 3. すべてのzero×lowの組み合わせでスワップを試す
  * 4. 最も改善量が大きいスワップがあれば適用
  * 
  * 計算コスト削減:
  *   全組み合わせではなく、効用が低い上位TOP_VARS個のみ評価
  *   → 変数が多い場合の計算時間を抑制
+ * 
+ * 注意: currentStateは直接変更される
  * 
  * @param {State} currentState - 現在の状態（valuesは直接変更される）
  * @param {number[]} utilities - 各変数の効用値配列
@@ -524,25 +526,25 @@ function tryBestMove(currentState, candidates, utilities, varRange, calcCell) {
  * @param {GoogleAppsScript.Spreadsheet.Range} calcCell - ダメージ計算セル
  * @returns {number} 改善があれば1、なければ0
  */
-function zeroHitSwapOptimization(currentState, utilities, varRange, calcCell) {
-  const zeroVars = getIndicesWhere(currentState.values, v => v === 0);
-  const lowUtilityVars = getLowUtilityVars(currentState.values, utilities);
+function tryZeroVars(currentState, utilities, varRange, calcCell) {
+  const zeroVars = filterIndices(currentState.values, v => v === 0);
+  const lowVars = selectLowVars(currentState.values, utilities);
 
-  if (zeroVars.length === 0 || lowUtilityVars.length === 0) return 0;
+  if (zeroVars.length === 0 || lowVars.length === 0) return 0;
 
-  writeAndFlush(varRange, currentState.values);
+  updateSheet(varRange, currentState.values);
   const baselineDamage = calcCell.getValue();
 
-  const bestSwap = findBestSwap(currentState.values, zeroVars, lowUtilityVars, baselineDamage, varRange, calcCell);
+  const bestSwap = findBestSwap(currentState.values, zeroVars, lowVars, baselineDamage, varRange, calcCell);
 
   if (bestSwap && bestSwap.gain > CONFIG.THRESHOLD) {
     currentState.values[bestSwap.zero]++;
     currentState.values[bestSwap.hit]--;
-    writeAndFlush(varRange, currentState.values);
+    updateSheet(varRange, currentState.values);
     return 1;
   }
 
-  writeAndFlush(varRange, currentState.values);
+  updateSheet(varRange, currentState.values);
   return 0;
 }
 
@@ -552,7 +554,7 @@ function zeroHitSwapOptimization(currentState, utilities, varRange, calcCell) {
  * @param {number[]} utilities - 各変数の効用値配列
  * @returns {number[]} 効用が低い変数のインデックス配列（最大TOP_VARS個）
  */
-function getLowUtilityVars(values, utilities) {
+function selectLowVars(values, utilities) {
   return values
     .map((v, i) => v > 0 ? { index: i, utility: utilities[i] } : null)
     .filter(x => x !== null)
@@ -581,7 +583,7 @@ function findBestSwap(values, zeroVars, hitVars, baselineDamage, varRange, calcC
       testValues[zero]++;
       testValues[hit]--;
 
-      writeAndFlush(varRange, testValues);
+      updateSheet(varRange, testValues);
       const gain = calcCell.getValue() - baselineDamage;
 
       if (gain > bestGain) {
