@@ -133,15 +133,10 @@ function showResultDialog(ui, result, executionTime) {
 function configureSubstatRange() {
   const ui = SpreadsheetApp.getUi();
   const props = PropertiesService.getDocumentProperties();
-  
-  ui.alert('サブステ範囲指定', 
-    '最適化したいサブステヒット数のセル範囲を選択してから「OK」を押してください\n' +
-    '例: B2:B11（縦一列のセル範囲を選択）', 
-    ui.ButtonSet.OK);
-  
   const selectedRange = SpreadsheetApp.getActiveRange();
+  
   if (!selectedRange) {
-    ui.alert('エラー', 'セル範囲が選択されていません', ui.ButtonSet.OK);
+    ui.alert('エラー', 'サブステ範囲を選択してからメニューを実行してください', ui.ButtonSet.OK);
     return;
   }
   
@@ -151,6 +146,18 @@ function configureSubstatRange() {
   }
   
   const rangeA1 = selectedRange.getA1Notation();
+  const current = props.getProperty('varRange');
+  
+  const response = ui.alert(
+    'サブステ範囲設定',
+    `現在の設定: ${current || '未設定'}\n` +
+    `新しい範囲: ${rangeA1}\n\n` +
+    `この範囲をサブステ範囲として設定しますか？`,
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (response !== ui.Button.YES) return;
+  
   props.setProperty('varRange', rangeA1);
   ui.alert('設定完了✅', `サブステ範囲: ${rangeA1}`, ui.ButtonSet.OK);
 }
@@ -161,15 +168,10 @@ function configureSubstatRange() {
 function configureCalcCell() {
   const ui = SpreadsheetApp.getUi();
   const props = PropertiesService.getDocumentProperties();
-  
-  ui.alert('計算値セル指定', 
-    'ダメージ計算結果が表示される単一セルを選択してから「OK」を押してください\n' +
-    '例: D2', 
-    ui.ButtonSet.OK);
-  
   const selectedRange = SpreadsheetApp.getActiveRange();
+  
   if (!selectedRange) {
-    ui.alert('エラー', 'セルが選択されていません', ui.ButtonSet.OK);
+    ui.alert('エラー', 'ダメージ計算セルを選択してからメニューを実行してください', ui.ButtonSet.OK);
     return;
   }
   
@@ -179,6 +181,18 @@ function configureCalcCell() {
   }
   
   const cellA1 = selectedRange.getA1Notation();
+  const current = props.getProperty('calcCell');
+  
+  const response = ui.alert(
+    '計算値セル設定',
+    `現在の設定: ${current || '未設定'}\n` +
+    `新しいセル: ${cellA1}\n\n` +
+    `このセルを計算値セルとして設定しますか？`,
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (response !== ui.Button.YES) return;
+  
   props.setProperty('calcCell', cellA1);
   ui.alert('設定完了✅', `計算値セル: ${cellA1}`, ui.ButtonSet.OK);
 }
@@ -555,12 +569,12 @@ function createSwapCandidates(activeVars, utilities) {
  * 最良の移動を試行し、改善があれば適用する
  * @param {State} currentState - 現在の状態（valuesは直接変更される）
  * @param {{from: number, to: number, priority: number}[]} candidates - 移動候補の配列
- * @param {number[]} utilities - 各変数の効用値配列（未使用：将来の拡張用に保持）
+ * @param {number[]} _ - 未使用パラメータ
  * @param {GoogleAppsScript.Spreadsheet.Range} varRange - 変数セル範囲
  * @param {GoogleAppsScript.Spreadsheet.Range} calcCell - ダメージ計算セル
  * @returns {boolean} 改善があればtrue
  */
-function applyBestSwap(currentState, candidates, utilities, varRange, calcCell) {
+function applyBestSwap(currentState, candidates, _, varRange, calcCell) {
   const baselineDamage = calcCell.getValue();
   const maxTries = Math.min(CONFIG.MAX_CANDIDATES, candidates.length);
 
