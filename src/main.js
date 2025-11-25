@@ -478,8 +478,6 @@ function applyBestSwap(currentState, candidates, utilities, varRange, calcCell) 
 
   for (let i = 0; i < maxTries; i++) {
     const candidate = candidates[i];
-    if (candidate.priority <= 0) break;
-
     const testValues = [...currentState.values];
     testValues[candidate.from]--;
     testValues[candidate.to]++;
