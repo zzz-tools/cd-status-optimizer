@@ -50,11 +50,12 @@ function onOpen() {
     .addItem('🚀 サブステ最適化計算', 'optimizeSubStats')
     .addSeparator()
     .addSubMenu(SpreadsheetApp.getUi().createMenu('⚙️ 設定')
+      .addItem('📍 サブステ範囲指定', 'configureSubstatRange')
+      .addItem('🎯 計算値セル指定', 'configureCalcCell') 
+      .addSeparator()
       .addItem('⚙️ バッチサイズ設定', 'configureBatchSize')
       .addItem('⚙️ 上位候補数設定', 'configureTopVars')
-      .addSeparator()
-      .addItem('📍 サブステ範囲指定', 'configureSubstatRange')
-      .addItem('🎯 計算値セル指定', 'configureCalcCell'))
+    )
     .addToUi();
 }
 
